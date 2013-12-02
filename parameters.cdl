@@ -1,0 +1,30 @@
+netcdf DAQlml.parameters {//written in NetCDF CDL language
+//dimensions:
+
+//variable declaration and attributes
+variables:
+//RT Preempt kernel parameters 
+  int RTpreempt;
+    RTpreempt:sampling_rate =     10000; //max = 200000 (=5 microsec)
+    RTpreempt:number_of_samples = 20000; //AcqTime=number_of_samples/sampling_rate
+//AnalogInput signals
+  int AnalogInput;
+    AnalogInput:device_path = "/dev/comedi0";// device path for AI
+    AnalogInput:range_id = 0; //0:[-10..+10] Volts on PCI 
+    AnalogInput:channel_index = 0; //channel index
+    AnalogInput:channel_name= "AI_0"; //!!channel_name=channel!!
+    AnalogInput:sampling_rate =     10000; //Samples/second 
+//    AnalogInput:number_of_samples = 50000; //AcqTime=number_of_samples/sampling_rate (not used in MIMO)
+//DigitalInputOutput signals
+  int DigitalInputOutput;
+    DigitalInputOutput:device_path = "/dev/comedi0"; // device path for DIO
+    DigitalInputOutput:channel_index = 0,1; //channel index
+    DigitalInputOutput:channel_name= "DO_0 DO_1"; //!!channel_name=channel!!	
+    DigitalInputOutput:direction = 1,1; //1=DO and 0=DI (for each channel)
+//    DigitalInputOutput:TTL_DC = 	 
+//    DigitalInputOutput:TTL_freq =	 
+//TTL signal
+//TODO: filters
+//TODO: controlers
+}
+

@@ -1,0 +1,484 @@
+#ifndef CCOMEDI
+#define CCOMEDI
+
+
+/**
+ * \file      Ccomedi.h (inspired by DAQcomedi.h of DAQlml)
+ * \author    BRAUD C.
+ * \version   1.0
+ * \date      2 December 2013
+ * \brief     Management of comedi driver
+ * \details   config AI, DIO (todo: buffer, AO, Counter, PWM ... ) 
+ */
+
+
+
+//!acquisition device
+/**
+ * acquisition device to record multiple 1D channels through comedi library
+ * \note member names were initially based on \c option structure from comedi demo examples
+ **/
+class DAQdevice
+{
+ public://! \todo [YN] use setter and getter !
+  int verbose; ///< verbose option
+
+  // comedi_cmd c,*cmd; ///< comedi command
+  std::vector<int> subdevice; ///< subdevice id
+  int aref; ///< reference, GROUND or DIFFERENCE
+  //int bufsize; ///< board buffer size
+  //comedi_t *dev;
+  //unsigned int chanlist[256]; ///< channellist corresponding to the channel index
+
+  //std::string device_path;///< device file name  
+
+  //Subdevice AI (0):
+  comedi_t *device_AI;
+  std::string device_path_AI;///< device file name 
+  comedi_range *comedirange_AI; ///< pointer to comedirange;
+  int maxdata_AI; ///< max value of voltage
+  int sample_number_AI; ///< sample number
+  int sampling_rate_AI; ///< sampling rate
+  int range_id_AI; ///< range id;
+  std::vector<int> channel_index_AI;//  
+  std::vector<std::string> channel_name_AI; ///< channel name
+
+  //Subdevice DIO (5):
+  comedi_t *device_DIO;
+  std::string device_path_DIO;///< device file name 
+  comedi_range *comedirange_DIO; ///< pointer to comedirange;
+  int maxdata_DIO; ///< max value of voltage
+  std::vector<int> channel_index_DIO;// channel direction
+  std::vector<int> channel_direction; // channel direction (Input/Output)
+  std::vector<std::string> channel_name_DIO; // channel name
+
+  //! constructor
+  //! \todo subdevice and aref should be configurable somewhere?
+  DAQdevice()
+    {
+      initDAQdevice();
+    }
+  
+  /*DAQdevice(std::string device)
+    {
+      device_path=device;
+      if(verbose) std::cout<<"Path of device"<< device_path << std::endl;
+      initDAQdevice();
+      }
+  */
+// !/todo add variable subdevice: 0 for read and 1 for write
+  void initDAQdevice()
+  {
+    //    subdevice=0;
+    aref=AREF_GROUND;
+    //    cmd = &c;    
+  }
+
+  //! print voltage range information
+  /*
+  *
+  * @param [in]    comedirange 
+  *
+  */
+  
+  int show_range(std::ostream &stream,comedi_range *comedirange)
+  {
+    ///- show minimum and maximum of the range
+    stream<<"range=["<<comedirange->min<<":"<<comedirange->max<<"] (";
+    ///- show unit of the range
+    std::string unit_name;
+    switch(comedirange->unit)
+      {
+      case UNIT_volt:
+	unit_name="volts";
+	break;
+      case UNIT_mA:
+	unit_name="milliamps";
+	break;
+      case UNIT_none:
+      default:
+	unit_name="none";
+	break;
+      }//switch unit
+    stream<<unit_name<<")\n";
+    return 0;
+  }
+
+
+  int config_device_common(comedi_t *dev)
+  {       
+        	
+    // read subdevice type
+    int n_subdevices, type;
+    n_subdevices=comedi_get_n_subdevices(dev);
+    //    if(verbose) std::cout<<"Configuration to use Analog Input channels"<<std::endl;
+    for(int i = 0; i < n_subdevices; i++)
+      {
+	type = comedi_get_subdevice_type(dev, i);
+	if(type==COMEDI_SUBD_AI)
+	  {
+	    //	    if(verbose) std::cout<<" Subdevice number for AI:"<< i <<std::endl;
+	    subdevice.push_back(i);	    
+	    //	    if(verbose) printf("number of AI channels: %d\n",comedi_get_n_channels(dev,i));
+	  }
+	if(type==COMEDI_SUBD_AO)
+	  {
+	    //	    if(verbose) std::cout<<" Subdevice number for AO:"<< i <<std::endl;
+	    subdevice.push_back(i);	    
+	    //	    if(verbose) printf("number of AO channels: %d\n",comedi_get_n_channels(dev,i));
+	  }
+	if(type==COMEDI_SUBD_DI)
+	  {
+	    //	    if(verbose) std::cout<<" Subdevice number for DI:"<< i <<std::endl;
+	    subdevice.push_back(i);	    
+	    //	    if(verbose) printf("number of DI channels: %d\n",comedi_get_n_channels(dev,i));
+	  }
+	if(type==COMEDI_SUBD_DO)
+	  {
+	    //	    if(verbose) std::cout<<" Subdevice number for DO:"<< i <<std::endl;
+	    subdevice.push_back(i);	    
+	    //	    if(verbose) printf("number of DO channels: %d\n",comedi_get_n_channels(dev,i));
+	  }
+	if(type==COMEDI_SUBD_DIO)
+	  {
+	    //	    if(verbose) std::cout<<" Subdevice number for DIO:"<< i <<std::endl;
+	    subdevice.push_back(i);	    
+	    //	    if(verbose) printf("number of DIO channels: %d\n",comedi_get_n_channels(dev,i));
+	  }
+	/*
+	  TODO: add other subdevices for general implementation of acquisition boards
+	    COMEDI_SUBD_COUNTER 	
+	    COMEDI_SUBD_TIMER 	
+	    COMEDI_SUBD_MEMORY 	
+	    COMEDI_SUBD_CALIB 	
+	    COMEDI_SUBD_PROC 	
+	    COMEDI_SUBD_SERIAL 	
+	    COMEDI_SUBD_PWM 
+	*/
+      }
+
+    // check subdevice flag before using it
+    
+	return 0;
+  }//config_device_common
+
+
+
+  //! load acquisition parameter from file for Analog Input channel
+  /**
+   * load acquisition parameters from NetCDF file (i.e. .CDL; ncgen -o parameters.nc parameters.cdl): such as sampling conditions.
+   * The program user should specify all program parameters within this .CDL file.
+   * \param [in] file_name NetCDF/CDL parameter file name (e.g. file named "parameters.nc")
+   * \see show_range
+   **/
+  int load_parameter_AI(const std::string file_name)
+  {
+    //    config_device_common();
+    //NetCDF/CDL parameter file object (i.e. parameter class)
+    CParameterNetCDF fp;
+    //open file from its name
+    int error=fp.loadFile((char *)file_name.c_str());
+    if(error){std::cerr<<"loadFile return "<< error <<std::endl;return error;}
+    ///open acquisition variable (i.e. process variable)
+    //prepare to load parameters as the attribute of "acquisition"
+    //! \bug \c process should be \c int or \c byte instead of \c float
+    float process;
+    std::string process_name="AnalogInput";
+    if((error=fp.loadVar(process,&process_name))){std::cerr<<"Error: process variable \""<<process_name<<"\" can not be loaded (return value is "<<error<<")\n";return error;}
+    ///load attributes (i.e. process parameters)
+    // load parameters as process attributes
+    //! \todo [low] add error messages for all attributes
+    fp.loadAttribute("device_path",device_path_AI);
+    //set device name for AI
+    device_AI = comedi_open(device_path_AI.c_str());
+    //Set AI subdevice=subdevice.at(0)
+    config_device_common(device_AI);    
+    fp.loadAttribute("channel_index",channel_index_AI);
+    // for(int i = 0; i < channel_index_AI.size(); i++) std::cout << "COUCOU" << channel_index_AI.at(i) << std::endl;
+    fp.loadAttribute("channel_name",channel_name_AI);
+    fp.loadAttribute("range_id",range_id_AI);    
+    int	n_ranges=comedi_get_n_ranges(device_AI,subdevice.at(0),channel_index_AI.at(0)); 
+    if (range_id_AI > (n_ranges-1)) 
+      {
+      std::cout << "range_id does not exist, max range_id=" << n_ranges-1 << std::endl; 
+      exit(EXIT_FAILURE);
+      }
+
+    fp.loadAttribute("sampling_rate",sampling_rate_AI);
+    //fp.loadAttribute("number_of_samples",sample_number_AI);
+
+    //    setchannellist();// for comedi_cmd data structure
+    return 0;
+    }
+
+  int load_parameter_DIO(const std::string file_name)
+  {
+    //    config_device_common();
+    //NetCDF/CDL parameter file object (i.e. parameter class)
+    CParameterNetCDF fp;
+    //open file from its name
+    int error=fp.loadFile((char *)file_name.c_str());
+    if(error){std::cerr<<"loadFile return "<< error <<std::endl;return error;}
+    ///open acquisition variable (i.e. process variable)
+    //prepare to load parameters as the attribute of "acquisition"
+    //! \bug \c process should be \c int or \c byte instead of \c float
+    float process;
+    std::string process_name="DigitalInputOutput";
+    if((error=fp.loadVar(process,&process_name))){std::cerr<<"Error: process variable \""<<process_name<<"\" can not be loaded (return value is "<<error<<")\n";return error;}
+    ///load attributes (i.e. process parameters)
+    // load parameters as process attributes
+    //! \todo [low] add error messages for all attributes
+    fp.loadAttribute("device_path",device_path_DIO);
+    //set device name for DIO
+    device_DIO = comedi_open(device_path_DIO.c_str());
+    //Set AI subdevice=subdevice.at(5)
+    config_device_common(device_DIO);    
+    //    comedi_t *dev = comedi_open(device_path_DIO.c_str());
+    fp.loadAttribute("channel_index",channel_index_DIO);
+    //    std::cout << "COUCOU" << channel_index_AI.size() << std::endl;
+    // for(int i = 0; i < channel_index_AI.size(); i++) std::cout << "COUCOU" << channel_index_AI.at(i) << std::endl;
+    fp.loadAttribute("channel_name",channel_name_DIO);
+    fp.loadAttribute("direction",channel_direction);
+
+    //    setchannellist();// for comedi_cmd data structure
+    return 0;
+    }
+
+
+
+  //! configure device (A/D board) for point to point AI acquisition (to be used in RT kernel)
+  /** 
+   * [out] sdflag, comedi_range , maxdata
+device_path   *
+   * @return subdevice for AI
+  **/ 
+  int config_AI(int& sdflag,const std::string file_name)
+  {
+    if(verbose) std::cout<<"#*********************** Configuration to use Analog Input channels:"<<std::endl;
+
+    //load parameter for AI
+    load_parameter_AI(file_name);	
+    //Set maxdata and comedirange for conversion 
+    maxdata_AI = comedi_get_maxdata(device_AI,subdevice.at(0),channel_index_AI.front());
+    comedirange_AI = comedi_get_range(device_AI,subdevice.at(0),channel_index_AI.front(),range_id_AI);
+    //Set Device flag 
+    sdflag = comedi_get_subdevice_flags(device_AI, subdevice.at(0));
+    // print information
+    if(verbose){
+      std::cout<<"Device address = "<< device_AI << std::endl;
+      std::cout<<"Device path = "<< device_path_AI << std::endl;
+      show_range(std::cout,comedirange_AI);
+      std::cout<<"Subdevice number for AI = "<< subdevice.at(0) << std::endl;
+      std::cout<<"Number of AI channels used = " << channel_index_AI.size() <<"/" << comedi_get_n_channels(device_AI,subdevice.at(0)) << std::endl;
+      std::cout<< "Sampling rate (Samp/sec) = " <<  sampling_rate_AI << std::endl;
+      //std::cout<< "Sample number = " <<  sample_number_AI << std::endl;
+      std::cout<<"subdevice flag: "<<std::hex<<sdflag<<std::dec<<std::endl;
+    }
+   if(verbose) std::cout<<"#***********************" <<std::endl;
+    
+    return subdevice.at(0);
+
+  }//config_AI
+
+  //! configure device (A/D board) for point to point DIO (to be used in RT kernel)
+  /** 
+   * [out] sdflag, comedi_range , maxdata : caracteristics of the subddevice
+   * [in]  direction                      : =1 --> DI or =0 --> DO 
+   *
+   * @return subdevice for AI
+  **/ 
+  int config_DIO(int& sdflag,const std::string file_name)
+  {
+    if(verbose) std::cout<<"#*********************** Configuration to use DIO channels:"<<std::endl;
+    //load parameter for DIO
+    load_parameter_DIO(file_name);
+    //Set maxdata and comedirange for conversion 
+    maxdata_DIO = comedi_get_maxdata(device_DIO,subdevice.at(5),channel_index_DIO.front());
+    comedirange_DIO = comedi_get_range(device_DIO,subdevice.at(5),channel_index_DIO.front(),0); //range_id_DIO);
+    //Set Device flag 
+    sdflag = comedi_get_subdevice_flags(device_DIO, subdevice.at(5));
+    // print information
+    if(verbose){
+      std::cout<<"Device address = "<< device_DIO << std::endl;
+      std::cout<<"Device path = "<< device_path_DIO << std::endl;
+      show_range(std::cout,comedirange_DIO);
+      std::cout<<"Subdevice number for DIO = "<< subdevice.at(5) << std::endl;
+      std::cout<<"Number of DIO channels used = " << channel_index_DIO.size() <<"/" << comedi_get_n_channels(device_DIO,subdevice.at(5)) << std::endl;
+      std::cout<<"subdevice flag: "<<std::hex<<sdflag<<std::dec<<std::endl;
+    }
+    //Set channel directions
+    for(int i=0; i< channel_index_DIO.size();i++)
+      {	
+	if(channel_direction.at(i) == 1) 
+	  {	
+	    std::cout << "Configuring channel index " << channel_index_DIO.at(i) << " as output" << std::endl; 
+	    comedi_dio_config(device_DIO,subdevice.at(5), channel_index_DIO.at(i),COMEDI_OUTPUT);	
+	  }	
+	else
+	  {
+	    std::cout << "Configuring channel index " << channel_index_DIO.at(i) << " as input" << std::endl; 
+	    comedi_dio_config(device_DIO,subdevice.at(5), channel_index_DIO.at(i),COMEDI_INPUT);
+	  }
+      }
+   if(verbose) std::cout<<"#***********************" <<std::endl;
+    return subdevice.at(5);
+  }//config_DIO
+
+  //TODO: function to config AO, DI, DO, ... and buffer
+
+};//DAQdevice class
+
+//! convert integer 16bit binary data into float physical voltage
+/** 
+ * 
+ * 
+ * @param [in]    data integer binary
+ * @param [inout] data_phys physical voltage
+ * @param [in]    comedirange 
+ * @param [in]    maxdata
+ * 
+ * @return 
+ */
+template <typename Tacquisition, typename Tphysical>
+  int convert_to_phys(cimg_library::CImgList<Tacquisition>& data, cimg_library::CImgList<Tphysical>& data_phys,comedi_range *comedirange, int maxdata)
+{
+  data_phys.assign(data);
+  cimglist_for(data,c)
+    {
+      cimg_forX(data[c],s)
+	{
+	  data_phys[c](s)=comedi_to_phys(data[c](s), comedirange, maxdata);
+	}
+    }
+  return 0;
+}
+
+//! convert float physical voltage into integer 16bit binary data
+/** 
+ * 
+ * 
+ * @param [out] data integer binary
+ * @param [in] data_phys physical voltage
+ * @param [in]    comedirange 
+ * @param [in]    maxdata
+ * 
+ * @return 
+ */
+template <typename Tacquisition, typename Tphysical>
+  int convert_from_phys(cimg_library::CImgList<Tphysical>& data_phys, cimg_library::CImgList<Tacquisition>& data,comedi_range *comedirange, int maxdata, const bool assign=true)
+{
+  if(assign) data.assign(data_phys);
+  cimglist_for(data_phys,c)
+    {
+      cimg_forX(data_phys[c],s)
+	{
+	  data[c](s)=comedi_from_phys(data_phys[c](s),comedirange,maxdata);
+	}
+    }
+  return 0;
+}
+
+
+int get_board_info(std::string fd, bool verbose)
+{
+
+  std::vector<std::string> subdevice_types;
+  subdevice_types.push_back("unused");
+  subdevice_types.push_back("analog input");
+  subdevice_types.push_back("analog output");
+  subdevice_types.push_back("digital input");
+  subdevice_types.push_back("digital output");
+  subdevice_types.push_back("digital I/O");
+  subdevice_types.push_back("counter");
+  subdevice_types.push_back("timer");
+  subdevice_types.push_back("memory");
+  subdevice_types.push_back("calibration");
+  subdevice_types.push_back("processor");
+  subdevice_types.push_back("serial digital I/O");
+
+  comedi_t *it;
+  int i,j;
+  int n_subdevices, type;
+  int chan, n_chans;
+  int n_ranges;
+  int subdev_flags;
+  comedi_range *rng;
+  comedi_cmd cmd;
+
+  it=comedi_open((char*)fd.c_str());
+  std::cout<<"version code: "<<comedi_get_version_code(it)<<std::endl;
+  std::cout<<"device file: "<<fd<<std::endl; 
+  std::cout<<"driver name: "<<comedi_get_driver_name(it)<<std::endl;
+  std::cout<<"board name: "<<comedi_get_board_name(it)<<std::endl;
+
+  comedi_get_cmd_generic_timed(it, 0, &cmd, 1, 1); // assuming analog input is channel 0
+  int min_convert_time=cmd.convert_arg;
+
+  if(verbose)
+    {
+      n_subdevices=comedi_get_n_subdevices(it);
+      std::cout<<"number of subdevices: "<<n_subdevices<<std::endl;
+      for(i = 0; i < n_subdevices; i++){
+	printf("subdevice %d:\n",i);
+	type = comedi_get_subdevice_type(it, i);
+	std::cout<<" type:"<<type<<subdevice_types[type]<<std::endl;
+	if(type==COMEDI_SUBD_UNUSED)
+	  /*
+	    COMEDI_SUBD_UNUSED 	
+	    COMEDI_SUBD_AI 	
+	    COMEDI_SUBD_AO 	
+	    COMEDI_SUBD_DI 	
+	    COMEDI_SUBD_DO 	
+	    COMEDI_SUBD_DIO 	
+	    COMEDI_SUBD_COUNTER 	
+	    COMEDI_SUBD_TIMER 	
+	    COMEDI_SUBD_MEMORY 	
+	    COMEDI_SUBD_CALIB 	
+	    COMEDI_SUBD_PROC 	
+	    COMEDI_SUBD_SERIAL 	
+	    COMEDI_SUBD_PWM 
+	  */	
+	  return 0;
+	subdev_flags = comedi_get_subdevice_flags(it, i);
+	printf("  flags: 0x%08x\n",subdev_flags);
+	n_chans=comedi_get_n_channels(it,i);
+	printf("  number of channels: %d\n",n_chans);
+	if(!comedi_maxdata_is_chan_specific(it,i)){
+	  printf("  max data value: %lu\n", (unsigned long)comedi_get_maxdata(it,i,0));
+	}else{
+	  printf("  max data value: (channel specific)\n");
+	  for(chan=0;chan<n_chans;chan++){
+	    printf("    chan%d: %lu\n",chan,
+		   (unsigned long)comedi_get_maxdata(it,i,chan));
+	  }
+	}
+	printf("  ranges:\n");
+	if(!comedi_range_is_chan_specific(it,i)){
+	  n_ranges=comedi_get_n_ranges(it,i,0);
+	  printf("    all chans:");
+	  for(j=0;j<n_ranges;j++){
+	    rng=comedi_get_range(it,i,0,j);
+	    printf(" [%g,%g]",rng->min,rng->max);
+	  }
+	  printf("\n");
+	}else{
+	  for(chan=0;chan<n_chans;chan++){
+	    n_ranges=comedi_get_n_ranges(it,i,chan);
+	    printf("    chan%d:",chan);
+	    for(j=0;j<n_ranges;j++){
+	      rng=comedi_get_range(it,i,chan,j);
+	      printf(" [%g,%g]",rng->min,rng->max);
+	    }
+	    printf("\n");
+	  }
+	}
+	printf("  command:\n");
+	//	get_command_stuff(it,i);
+
+      }
+    }//verbose
+  return min_convert_time;
+}
+
+#endif// CCOMEDI
+

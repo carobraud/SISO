@@ -1,0 +1,350 @@
+/**
+ * \file      siso.cpp (todo: Csiso.h)
+ * \author    BRAUD C.
+ * \version   1.0
+ * \date      2 December 2013
+ * \brief
+ * \details
+ */
+
+
+#include <stdio.h>     
+#include <vector>
+#include <comedilib.h>
+#include <stdlib.h>
+#include <string.h>
+#include <iostream>
+#include <math.h>
+#include <sstream>
+
+#include <iomanip>
+
+// useCimg
+#include "../CImg/CImg.h"
+//NetCDF library and extensions
+#include <netcdfcpp.h>
+#include "../NetCDF.Tool/struct_parameter_NetCDF.h"
+#include "../NetCDF.Tool/NetCDFinfo.h"
+#include "../CImg.Tool/CImg_NetCDF.h"
+
+// use class for comedi drivers
+#include "Ccomedi.h"
+// use class for Real Time linux kernel (Preemptif) 
+#include "RT_PREEMPT.h"
+// use class to save in NetCDF format
+#include "CsaveNetCDF.h"
+
+using namespace cimg_library;
+using namespace std;
+
+// Min RTdt=0.000005sec --> max f_DO=20kHz
+//sudo ./1DO_1AI_RT  --show 1 --dc_DO 0.5 --f_DO 20000 --RTdt 0.000005 --samp 1000000 > tot
+
+int main(int argc,char *argv[])
+{
+  //commmand line options  
+  //************
+
+  const int         verbose    = (cimg_option("-v",(const char*)NULL,"verbose option")!=NULL);
+  const bool        show_info  = (cimg_option("--info",(const char*)NULL,"information")!=NULL);
+  const bool        show_help  = (cimg_option("-h",(const char*)NULL,"information")!=NULL);
+//  const std::string fd  =  cimg_option("--fd","/dev/comedi0","board device name");
+  const std::string fp  =  cimg_option("--fp","parameters.nc","input parameter file");
+  const std::string fo  =  cimg_option("--fo","data.nc","output data file");
+  const int  show      = (cimg_option("--show",1,"display result as a graph"));
+  //const double DC_DO         =  cimg_option("--dc_DO",0.5,"Duty Cycle for the output square wave signal (e.g. --dc_DO 0.5 for 50%DC TTL)");
+  const double f_DO         =  cimg_option("--f_DO",100.,"Frequency of the output square wave signal (e.g. --f_DO 10 for 10Hz TTL)");
+//  const double dt         =  cimg_option("--dt",0.025,"Time between signals in s(e.g. --dt 0.025)");
+  if( cimg_option("-I",(const char*)NULL,"show compilation options") != NULL )
+    {
+      cimg_library::cimg::info();
+    }
+
+  if (show_help|show_info)
+    return 0; // program stops after printing the information
+
+  //Begin program
+
+  //***************** COMEDI
+  // Configure device for AI and DO (point to point)
+  int temp;
+  //** create DAQdevice object
+  DAQdevice DAQdev;
+    //** verbose
+  DAQdev.verbose=verbose;
+  //** configure AI 
+  int subdev_in=DAQdev.config_AI(temp,fp); 
+  //** configure DO 
+  int subdev_out =DAQdev.config_DIO(temp,fp);   
+  //** mask set to write all DO
+  unsigned int mask_bit=0xFF; 
+  //** Initiate DO channel number 1 to 0
+  unsigned int bits=0x01; // hexdecimal number to set channel's bit value
+  //comedi_dio_bitfield2(DAQdev.device_DIO,subdev_out,mask_bit,&bits,0); //bit 1 is 5V        
+  //***
+     
+
+  //****************************** Acquisition Time for AI Inputs
+  struct timespec T_AI;
+  T_AI.tv_nsec=int((1/(double(DAQdev.sampling_rate_AI)))*1e9); /*Acquisition time of Analog/Input signal in ns*/
+  T_AI.tv_sec=0;
+  std::cout << "# T_AI [s]:\t" << T_AI.tv_nsec*1e-9 << std::endl;
+  lsampl_t value; /*Acquire value from AI*/
+  
+  //****************************** TTL Times for DO OUTPUTS
+  double T_DO=(1/f_DO)*1e9; /*period of TTL in ns*/
+  //int TH= int((DC_DO/f_DO)*1e9); /*time high of TTL in ns*/
+  //int TL=int(T_DO)-TH;    /*time low of TTL in ns*/
+  // Initialisation
+  double DC_DO=0.5;	
+  int TH=int((DC_DO/f_DO)*1e9);
+  int TL=int(T_DO)-TH;		  
+//  int dtmus=dt*1e9; /*time shift between channels in ns*/ 
+  struct timespec timeTTL;
+  timeTTL.tv_nsec=0;
+  timeTTL.tv_sec=0;
+  std::cout << "# TTL: TH [s]:\t " << TH*1e-9 << " \t TL [s]:\t " << TL*1e-9 << std::endl;
+  //***************************** 
+
+  //***************************** MANAGEMENT RT KERNEL
+  //*** define variable class RT_preempt 
+  RT_preempt RT;
+  //*** Initialization RT_PREEMPT kernel   
+  RT.initialization();
+  //*** Load parameters for RT management
+  RT.load_parameter(fp);	 
+  //** verbose
+  RT.verbose=verbose;
+  //*** USEFULL TIME DEFINITION     
+  RT.interval=int((1/double(RT.sampling_rate))*1e9); //in nanosec  
+  RT.time.tv_nsec=0;
+  RT.time.tv_sec=0;
+  //**** TEMP VARIABLES
+  struct timespec timea;  
+  struct timespec timeb;
+  //  int sample_number=500000; // number of RT intervals
+  //***************************** 
+
+  //***************************** TEMP VARIABLES
+  unsigned int counter=1;
+  unsigned int counternew=0;
+  unsigned int counterold=1;
+  int i=0;
+  int j=0;
+  //***************************** 
+
+  //***************************** VARIABLES TO SAVE
+  cimg_library::CImg<double>     time_sec(RT.sample_number);
+  cimg_library::CImg<double>     time_nsec(RT.sample_number);
+  cimg_library::CImgList<double> data_IN(1,RT.sample_number);
+  cimg_library::CImgList<double> data_phys_IN(1,RT.sample_number);
+  cimg_library::CImgList<int>   data_OUT(1,RT.sample_number);
+  cimg_library::CImgList<double> data_phys_OUT(1,RT.sample_number);
+  //***************************** 
+  
+  //  const std::string fp="tot";
+  //DAQdevice DAQdev(fp);
+  //DAQdev.verbose=verbose;
+
+  //while(1) 
+    for(int isamp=0;isamp< RT.sample_number;++isamp)
+    {
+
+      // unavoidable nanowait 
+      RT.nanowait();     
+
+      //Get absolute real time 
+      timea=RT.t; 
+      //std::cout << "timea [ns]=" << timea.tv_nsec << endl;
+      //std::cout << "timea [s]=" << timea.tv_sec << endl;
+
+      //********* manage increment TTL 
+      //check that "counter" is incremented
+      if (counternew-counterold !=0)
+	{
+	  //Automatic increment of TTL signal 
+	  if (counter%2 == 0) // if even add TL 	
+	    {
+	      j++;
+	      bits=0x00;	
+	      //std::cout << "Pair j=" << j << endl;
+	    }
+	  else	
+	    {
+	//std::cout << "COUCOU" << endl;	
+	      i++;         // if odd add TH
+	      bits=0x01;
+	      //std::cout << "Impair i=" << i << endl;
+	    }
+	}
+      //*********************************
+
+
+      //************* Increment timeTTL alternativelly with TH and TL
+      timeTTL.tv_nsec=i*TH+j*TL;
+      //*********************************
+
+
+      //************* Management timeTTL
+      //*** To avoid overflow separate timeTTL in nsec and sec
+      if (timeTTL.tv_nsec >= NSEC_PER_SEC) 
+	{
+	  //std::cout << "timeTTL= + 1 SEC" << std::endl;	  
+	
+	  timeTTL.tv_nsec -= NSEC_PER_SEC;
+	  timeTTL.tv_sec++;
+	  // if timeTTL in nsec remains --> force it to TH or TL depending on counter
+	  if(timeTTL.tv_nsec != 0)
+	    {
+	      //Reinitialisation of i and j to avoid overflow of timeTTL
+	      i=0;
+	      j=0;
+	      //Increment i or j depending on counter (odd or even)
+	      if (counter%2 == 0) 
+		{
+		  j++;
+		}
+	      else	
+		{
+		  i++;
+		}	    
+	    }
+	  else
+	    {
+	      //Simple Reinitialisation of i and j
+	      i=0;
+	      j=0;
+	    }
+	}      
+      //**********************************
+      
+      
+      //*********** READ AI every T_AI +/- RT.interval
+      if((RT.time.tv_nsec%T_AI.tv_nsec == 0) || ((((RT.time.tv_nsec%T_AI.tv_nsec)-T_AI.tv_nsec) < 0)&& ((((RT.time.tv_nsec%T_AI.tv_nsec)+RT.interval)-T_AI.tv_nsec) > 0)))
+	{
+	   comedi_data_read_delayed(DAQdev.device_AI,subdev_in,0/*channel*/,0/*range*/,0/*aref*/,&value,1);	  	   
+	//if (isamp > 1)	std::cout << " DATA IN =  " <<  data_phys_IN[0](isamp-1) << std::endl;
+	//if (isamp > 1)	std::cout << " Time =  " <<  double(RT.time.tv_nsec)*1e-9 << std::endl;
+	}
+      //****************************************
+
+      
+      //*********** SAVE IN BUFFER: 
+      //todo : save only if flag=1 so that NO SAVING for "infinit loop: while(1)" and SAVING for "sample loop:for i=0 to i=sample_loop"
+      time_nsec(isamp)=float(RT.time.tv_nsec*1e-9); //in s 
+      time_sec(isamp)=float(RT.time.tv_sec);
+      data_OUT[0](isamp)=int(bits);
+      data_IN[0](isamp)=value;
+
+      //** conversion from bit to phys
+      data_phys_IN[0](isamp)=comedi_to_phys(data_IN[0](isamp),DAQdev.comedirange_AI, DAQdev.maxdata_AI);
+      data_phys_OUT[0](isamp)=data_OUT[0](isamp)*DAQdev.comedirange_DIO->max;
+      //******************************************
+      //std::cout << " DATA_OUT =  " <<  int(bits) << " DATA_phys_OUT = " << data_phys_OUT[0](isamp) <<std::endl;
+        
+      counterold=counter;
+      //********** write TTL *****************************************************
+      if (((RT.time.tv_nsec == timeTTL.tv_nsec) && (RT.time.tv_sec == timeTTL.tv_sec))|| 
+	  (((RT.time.tv_nsec < timeTTL.tv_nsec) && (RT.time.tv_nsec +RT.interval > timeTTL.tv_nsec))&& (RT.time.tv_sec == timeTTL.tv_sec)))
+	{
+	  counter++;
+	  //std::cout << "Counter=" << counter << endl;
+  	   comedi_dio_bitfield2(DAQdev.device_DIO,subdev_out,mask_bit,&bits,0);  
+       //************* Variable DC of TTL using AI	
+	if (isamp > 1)
+	{
+      	DC_DO=0.5; //(data_phys_IN[0](isamp-1)+1.)/2.;	
+      	TH=int((DC_DO/f_DO)*1e9); /*time high of TTL in ns*/
+      	TL=int(T_DO)-TH;    /*time low of TTL in ns*/	
+      //**************************************
+      	//std::cout << "AI = " << data_phys_IN[0](isamp-1) << " DC = " << DC_DO << " TH = " << double(TH)*1e-9 << " TL = " << double(TL)*1e-9 << std::endl;	  
+        }
+
+	  // OUTPUT FOR Gnuplot:
+	  //std::cout << time.tv_sec << "\t"<< time.tv_nsec*1e-6 << "\t"<< counter << "\t" << data_OUT[0](isamp)<< std::endl;
+	
+      //**************************************************************************
+      }
+     // else
+//	{ 	
+      // Increment time by RT.interval value
+      RT.next_time_interval();
+      
+      //Get absolute real time b 
+      timeb=RT.t; 
+      //std::cout << "timeb [ns]=" << timeb.tv_nsec << endl;
+      //std::cout << "timeb [s]=" << timeb.tv_sec << endl;
+      
+      //Get relative real time: time=(timeb-timea)
+      RT.time_diff(timea,timeb);
+//	}
+      counternew=counter;
+
+    } //end while or and sample loop
+
+
+	//todo: channel_name_AI + channel_name_DIO
+	//todo: channel_index_AI + channel_index_DIO
+	//std::vector<int> channel_name;
+	//channel_name.pushback(channel_name_AI);	
+	//channel_name.pushback(channel_name_DIO);	
+	//std::vector<int> channel_index;
+	//channel_name.pushback(channel_index_AI);	
+	//channel_name.pushback(channel_index_DIO);	
+
+// SAVE NetCDF format
+
+     cimg_library::CImgList<double> time_tmp (1,RT.sample_number);
+     time_tmp[0]=time_nsec+time_sec;
+     std::string unit="volt";
+     save_data(fo,data_phys_IN,time_tmp, DAQdev, unit);
+    
+    //TODO: save data for DIO and control ... in the same file ??
+    // save_data(fo_IN,time_nsec_tmp, data_phys_IN, DAQdev.channel_name_AI, DAQdev.channel_index_AI, DAQdev.sampling_rate_AI, RT.sample_number, DAQdev.comedirange_AI->unit);
+    // save_data(fo_OUT,time_nsec_tmp, data_phys_OUT, DAQdev.channel_name_DIO, DAQdev.channel_index_DIO, DAQdev.sampling_rate_DIO, RT.sample_number, DAQdev.comedirange_DIO->unit);
+
+    if(show==1)
+      {
+	cimg_library::CImg<float> display_OUT;
+	cimg_library::CImg<float> display_IN;
+	cimg_library::CImg<float> display_time;
+	//display.append(time_sec);
+	//display.append(time_nsec);
+	display_OUT.append(data_phys_OUT[0]);
+	display_OUT.assign(data_phys_OUT[0].width(),1,1,1);
+	display_IN.append(data_phys_IN[0]);
+	display_IN.assign(data_phys_IN[0].width(),1,1,1);
+	display_time.append(time_tmp[0]);
+	display_time.assign(time_tmp[0].width(),1,1,1);
+	//cimglist_for(data_OUT,n) display.append(data_OUT[n]);//concat lines
+	//display.assign(data_OUT[0].width(),1,1,data_OUT.size());//set right dimensions
+
+	//display as color graphs by set of 3
+	for(int c=0;c<display_OUT.spectrum();c+=3)
+	  {
+	    int c0=c,c1=((c+3)<display_OUT.spectrum())?(c+2):(display_OUT.spectrum()-1);
+	    (display_OUT.get_shared_channels(c0,c1)).display_graph("channels recorded");
+	  }
+	//display as color graphs by set of 3
+         //display_IN.display_graph("channels recorded",0,5);
+	for(int c=0;c<display_IN.spectrum();c+=3)
+	  {
+	    int c0=c,c1=((c+3)<display_IN.spectrum())?(c+2):(display_IN.spectrum()-1);
+	    (display_IN.get_shared_channels(c0,c1)).display_graph("channels recorded",0,5);
+	  }
+        
+	for(int c=0;c<display_time.spectrum();c+=3)
+	  {
+	    int c0=c,c1=((c+3)<display_time.spectrum())?(c+2):(display_time.spectrum()-1);
+	    (display_time.get_shared_channels(c0,c1)).display_graph("time",0,5);
+	  }
+
+
+      }
+		 
+    
+  return 0;
+}
+
+
+

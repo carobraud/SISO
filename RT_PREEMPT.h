@@ -1,0 +1,164 @@
+#ifndef RT_PREEMPT
+#define RT_PREEMPT
+
+/**
+ * \file      RT_PREEMPT.h 
+ * \author    BRAUD C.
+ * \version   1.0
+ * \date      2 December 2013
+ * \brief     Management of RT Preempt kernel
+ * \details    
+ */
+
+
+#include <time.h>
+#include <sched.h>
+#include <sys/mman.h>
+#include <iostream>
+#include <stdio.h>     
+
+class RT_preempt{
+ public:
+  int verbose; ///< verbose option
+  int interval;///< real time resolution
+  struct timespec t; ///< real time variable
+   struct timespec time;  // relative time 
+  int sampling_rate; //sampling RT rate
+  int sample_number; //number of samples separated by RT.interval
+
+ /*
+  //! constructor
+  void initialization();
+  //! functions
+  void nanowait();
+  void next_time_interval();
+  };*/
+
+void initialization()
+{
+//  interval= DEMIPERIOD; /* 50us*/
+  //int interval = 50000; /* 50us*/
+  set_RTpriority();  
+  lock_memory_pagination();  
+  stack_prefault();  
+  gettime();  
+}
+
+void set_RTpriority() 
+{
+#define MY_PRIORITY (49) /* we use 49 as the PRREMPT_RT use 50
+                            as the priority of kernel tasklets
+                            and interrupt handler by default */
+  
+  struct sched_param param;
+  /* Declare ourself as a real time task */
+  
+  param.sched_priority = MY_PRIORITY;
+  if(sched_setscheduler(0, SCHED_FIFO, &param) == -1) 
+    {
+      perror("sched_setscheduler failed");
+      exit(-1);
+    }
+}
+  
+void lock_memory_pagination() 
+{
+  /* Lock memory */
+  
+  if(mlockall(MCL_CURRENT|MCL_FUTURE) == -1) {
+    perror("mlockall failed");
+    exit(-2);
+  }
+  
+}
+  
+void stack_prefault() {
+#define MAX_SAFE_STACK (8*1024) /* The maximum stack size which is
+                                   guranteed safe to access without
+                                   faulting */
+  
+  unsigned char dummy[MAX_SAFE_STACK];
+  
+  memset(dummy, 0, MAX_SAFE_STACK);
+  return;
+}
+
+void gettime()
+{
+  clock_gettime(CLOCK_MONOTONIC ,&t);
+  /* start after one second */
+  t.tv_sec++;
+  
+} 
+  
+void nanowait()
+{
+  /* Like nanosleep(2), clock_nanosleep() allows the calling thread to sleep for an
+     interval specified with nanosecond precision.*/
+  
+  clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &t, NULL);
+  
+}
+
+void next_time_interval()
+{
+#define NSEC_PER_SEC    (1000000000) /* The number of nsecs per sec. */
+  t.tv_nsec += interval;
+
+
+  while (t.tv_nsec >= NSEC_PER_SEC) {
+    t.tv_nsec -= NSEC_PER_SEC;
+    t.tv_sec++;}
+  // std::cout << "time in nsec" << t.tv_nsec << std::endl;
+  //std::cout << "time in sec" << t.tv_sec << std::endl;
+  
+}
+
+
+void time_diff(struct timespec timea,struct timespec timeb)
+{
+      //**check if timeb < timea (if yes means tv_sec incremented)
+      if (timeb.tv_nsec <= timea.tv_nsec)
+	{
+	  time.tv_nsec+= (timeb.tv_nsec+NSEC_PER_SEC) - timea.tv_nsec;
+	  time.tv_sec+=((timeb.tv_sec-1)-timea.tv_sec);
+	}
+      else
+	{
+	  time.tv_nsec+=(timeb.tv_nsec-timea.tv_nsec);
+	  time.tv_sec+=(timeb.tv_sec-timea.tv_sec);
+	}
+      //** To avoid overflow separate time in nsec and sec
+      if (time.tv_nsec >= NSEC_PER_SEC) 
+	{	
+	  time.tv_sec++ ;  
+	  time.tv_nsec -= NSEC_PER_SEC ;
+	}
+}
+
+int load_parameter(const std::string file_name)
+  {
+    //    config_device_common();
+    //NetCDF/CDL parameter file object (i.e. parameter class)
+    CParameterNetCDF fp;
+    //open file from its name
+    int error=fp.loadFile((char *)file_name.c_str());
+    if(error){std::cerr<<"loadFile return "<< error <<std::endl;return error;}
+    ///open acquisition variable (i.e. process variable)
+    //prepare to load parameters as the attribute of "acquisition"
+    //! \bug \c process should be \c int or \c byte instead of \c float
+    float process;
+    std::string process_name="RTpreempt";
+    if((error=fp.loadVar(process,&process_name))){std::cerr<<"Error: process variable \""<<process_name<<"\" can not be loaded (return value is "<<error<<")\n";return error;}
+    ///load attributes (i.e. process parameters)
+    // load parameters as process attributes
+    fp.loadAttribute("sampling_rate",sampling_rate);
+    if(verbose) std::cout<<"sampling rate in RT (Samp/sec) = "<< sampling_rate <<std::endl;
+    fp.loadAttribute("number_of_samples",sample_number);
+    if(verbose) std::cout<<"sample number = "<< sample_number <<std::endl;
+    return 0;
+    }
+
+}; //CLASS RT_PREEMPT
+
+#endif// RT_PREEMPT

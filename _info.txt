@@ -1,0 +1,2 @@
+Compil: ./compil.sh siso.cpp 0
+Usage: ncgen -o parameters.nc parameters.cdl; sudo ./siso -v 1 --show 1 --f_DO 10 --fp parameters.nc   
